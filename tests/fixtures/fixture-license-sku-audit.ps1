@@ -21,3 +21,4 @@ $allUsers = Get-MsolUser -All
 $unlicensedUsers = $allUsers | Where-Object { $_.IsLicensed -eq $false }
 
 Write-Output "Total users: $($allUsers.Count) | Unlicensed count: $($unlicensedUsers.Count)"
+

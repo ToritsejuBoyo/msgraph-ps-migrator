@@ -64,10 +64,7 @@ Comprehensive technical mapping reference for migrating deprecated `AzureAD`, `A
 | `Set-AzureADApplication` | `Update-MgApplication` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Replace `-ObjectId` with `-ApplicationId`. |
 | `Remove-AzureADApplication` | `Remove-MgApplication` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Replace `-ObjectId` with `-ApplicationId`. |
 | `New-AzureADApplicationKeyCredential` | `Add-MgApplicationPassword` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Pass `-ApplicationId <ID> -PasswordCredential @{DisplayName="Key"}`. Returns plain-text secret once. |
-| `New-AzureADApplicationPasswordCredential` | `Add-MgApplicationPassword` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Pass `-ApplicationId <ID> -PasswordCredential @{DisplayName="Key"}`. Plain text secret returned only upon creation. |
 | `Remove-AzureADApplicationKeyCredential` | `Remove-MgApplicationPassword` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Pass `-ApplicationId <ID> -KeyId <GUID>`. |
-| `New-AzureADServicePrincipalPasswordCredential` | `Add-MgServicePrincipalPassword` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Pass `-ServicePrincipalId <ID> -PasswordCredential @{DisplayName="Key"}`. Plain text secret returned only upon creation. |
-| `Remove-AzureADServicePrincipalPasswordCredential` | `Remove-MgServicePrincipalPassword` | `Application.ReadWrite.All` | `Application.ReadWrite.All` | Pass `-ServicePrincipalId <ID> -KeyId <GUID>`. |
 
 ---
 

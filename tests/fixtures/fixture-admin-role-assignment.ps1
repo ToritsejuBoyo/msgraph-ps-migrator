@@ -25,3 +25,4 @@ if ($role) {
         Add-MsolRoleMember -RoleObjectId $role.ObjectId -RoleMemberEmailAddress $AdminUpn
     }
 }
+

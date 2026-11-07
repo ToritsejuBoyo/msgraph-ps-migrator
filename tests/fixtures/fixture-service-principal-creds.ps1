@@ -25,3 +25,4 @@ if ($sp) {
 } else {
     Write-Output "Service Principal not found."
 }
+

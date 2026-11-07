@@ -520,6 +520,136 @@ def run_tests():
     except Exception as exc:
         suite.record(38, "Deterministic idempotency", False, str(exc))
 
+    # Test 39: Preserve Existing param() Block Without Duplicate param() Syntax Error
+    try:
+        script = 'param(\n    [string]$UserPrincipalName = "user@synthetic-test.local"\n)\nGet-MsolUser -UserPrincipalName $UserPrincipalName'
+        migrator = GraphMigrator(raw_script=script, script_name="ParamBlock.ps1")
+        analysis = migrator.analyze()
+        param_occurrences = re.findall(r"^\s*param\s*\(", analysis.modernized_script, flags=re.IGNORECASE | re.MULTILINE)
+        suite.record(39, "Existing param() block preserved at top without duplicate param() injection", len(param_occurrences) == 1)
+    except Exception as exc:
+        suite.record(39, "Existing param() block preservation", False, str(exc))
+
+    # Test 40: Single-User Lookup (-UserPrincipalName -> -UserId) Suppresses -All
+    try:
+        script = "$u = Get-MsolUser -UserPrincipalName $UserPrincipalName -ErrorAction SilentlyContinue"
+        migrator = GraphMigrator(raw_script=script, script_name="SingleUser.ps1")
+        analysis = migrator.analyze()
+        valid = "Get-MgUser -UserId $UserPrincipalName" in analysis.modernized_script and "-All" not in analysis.modernized_script
+        suite.record(40, "Get-MsolUser -UserPrincipalName maps to -UserId and suppresses invalid -All", valid)
+    except Exception as exc:
+        suite.record(40, "Single-user lookup -All suppression", False, str(exc))
+
+    # Test 41: Container Member Queries (Get-MgGroupMember / Get-MgDirectoryRoleMember) Inject -All Despite -GroupId
+    try:
+        script = "Get-AzureADGroupMember -ObjectId $g.Id\nGet-MsolRoleMember -RoleObjectId $r.Id"
+        migrator = GraphMigrator(raw_script=script, script_name="ContainerMembers.ps1")
+        analysis = migrator.analyze()
+        code = analysis.modernized_script
+        valid = "Get-MgGroupMember -GroupId $g.Id -All" in code and "Get-MgDirectoryRoleMember -DirectoryRoleId $r.Id -All" in code
+        suite.record(41, "Container member cmdlets inject -All even when -GroupId or -DirectoryRoleId is present", valid)
+    except Exception as exc:
+        suite.record(41, "Container member -All injection", False, str(exc))
+
+    # Test 42: Multiline Backtick Continuation Parameter Mapping
+    try:
+        script = "New-MsolUser -UserPrincipalName $upn `\n    -DisplayName $name `\n    -ForceChangePassword $true"
+        migrator = GraphMigrator(raw_script=script, script_name="MultilineBacktick.ps1")
+        analysis = migrator.analyze()
+        valid = "-ForceChangePasswordNextSignIn $true" in analysis.modernized_script
+        suite.record(42, "Multiline backtick continuation maps parameters on subsequent continuation lines", valid)
+    except Exception as exc:
+        suite.record(42, "Multiline backtick parameter mapping", False, str(exc))
+
+    # Test 43: Inline Comment Immunity (No Double-Counting & -All Placed Before Inline Comment)
+    try:
+        script = "$users = Get-MsolUser # replaces legacy Get-MsolUser call"
+        migrator = GraphMigrator(raw_script=script, script_name="InlineComment.ps1")
+        analysis = migrator.analyze()
+        valid = (
+            analysis.total_legacy_calls == 1
+            and "Get-MgUser -All # replaces legacy Get-MsolUser call" in analysis.modernized_script
+        )
+        suite.record(43, "Inline comments neither double-counted nor corrupted during -All injection", valid)
+    except Exception as exc:
+        suite.record(43, "Inline comment immunity", False, str(exc))
+
+    # Test 44: Quoted String Literal Cmdlet Immunity (Zero Bogus Findings)
+    try:
+        script = 'Write-Output "Deprecated command Get-MsolUser was retired"\nGet-MsolDomain'
+        migrator = GraphMigrator(raw_script=script, script_name="QuotedCmdlet.ps1")
+        analysis = migrator.analyze()
+        valid = (
+            analysis.total_legacy_calls == 1
+            and analysis.findings[0].legacy_cmdlet == "Get-MsolDomain"
+            and 'Write-Output "Deprecated command Get-MsolUser was retired"' in analysis.modernized_script
+        )
+        suite.record(44, "Cmdlet names inside quoted strings ignored by analyzer and untouched in output", valid)
+    except Exception as exc:
+        suite.record(44, "Quoted string literal immunity", False, str(exc))
+
+    # Test 45: Legacy SKU & Licensing Property Modernization (.AccountSkuId, .ActiveUnits, .IsLicensed)
+    try:
+        script = '$avail = $sku.ActiveUnits - $sku.ConsumedUnits\nWrite-Output $sku.AccountSkuId\n$u | Where-Object { $_.IsLicensed -eq $false }'
+        migrator = GraphMigrator(raw_script=script, script_name="SkuProps.ps1")
+        analysis = migrator.analyze()
+        code = analysis.modernized_script
+        valid = (
+            "$sku.PrepaidUnits.Enabled" in code
+            and "$sku.SkuPartNumber" in code
+            and "($_.AssignedLicenses.Count -eq 0)" in code
+        )
+        suite.record(45, "Legacy properties (.AccountSkuId, .ActiveUnits, .IsLicensed) modernized to Graph schema", valid)
+    except Exception as exc:
+        suite.record(45, "Legacy property modernization", False, str(exc))
+
+    # Test 46: Pre-Flight Checklist Valid Single -Scopes Array Syntax
+    try:
+        script = "Get-MsolUser\nGet-MsolGroup"
+        migrator = GraphMigrator(raw_script=script, script_name="ChecklistScopes.ps1")
+        analysis = migrator.analyze()
+        md = format_markdown(analysis)
+        valid = "Connect-MgGraph -Scopes 'Group.Read.All', 'User.Read.All'" in md
+        suite.record(46, "Markdown pre-flight checklist emits valid comma-separated -Scopes array syntax", valid)
+    except Exception as exc:
+        suite.record(46, "Pre-flight checklist -Scopes syntax", False, str(exc))
+
+    # Test 47: Bracketed IPv6 with Port Sanitization
+    try:
+        sanitizer = Sanitizer(enabled=True)
+        scrubbed = sanitizer.scrub_text("Endpoint https://[2600:1f18:416:9900::1]:8443/oauth2/token")
+        valid = "2600:1f18" not in scrubbed and "8443" not in scrubbed and "2001:db8::1" in scrubbed
+        suite.record(47, "Rule 4: Bracketed IPv6 address with port stripped and sanitized", valid)
+    except Exception as exc:
+        suite.record(47, "Bracketed IPv6 with port", False, str(exc))
+
+    # Test 48: PowerShell AST Scanner UTF-8 BOM & Single-Item JSON Inventory Ingestion
+    try:
+        import subprocess
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8-sig") as tf:
+            json.dump({
+                "TotalLegacyCalls": 1,
+                "UniqueCmdlets": "Get-MsolUser",
+                "Findings": {
+                    "File": "Single.ps1",
+                    "LineNumber": 1,
+                    "Cmdlet": "Get-MsolUser",
+                    "RawCommand": "Get-MsolUser -UserPrincipalName $upn"
+                }
+            }, tf)
+            temp_path = tf.name
+        proc = subprocess.run(
+            [sys.executable, str(script_file), "-i", temp_path, "--format", "json"],
+            capture_output=True, text=True, check=True
+        )
+        os.unlink(temp_path)
+        out_json = json.loads(proc.stdout)
+        valid = out_json["total_legacy_calls"] == 1 and "Get-MgUser -UserId $upn" in out_json["modernized_script"]
+        suite.record(48, "UTF-8 BOM and single-item JSON inventory from PowerShell AST parsed cleanly", valid)
+    except Exception as exc:
+        suite.record(48, "UTF-8 BOM JSON inventory ingestion", False, str(exc))
+
     print("==================================================================")
     print(f"  STRESS TEST SUMMARY: {suite.passed} PASSED, {suite.failed} FAILED out of {len(suite.results)} tests")
     print("==================================================================")

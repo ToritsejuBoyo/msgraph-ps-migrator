@@ -35,3 +35,4 @@ if ($members.ObjectId -notcontains $user.ObjectId) {
 } else {
     Write-Output "$MemberUpn is already a member of $GroupName."
 }
+

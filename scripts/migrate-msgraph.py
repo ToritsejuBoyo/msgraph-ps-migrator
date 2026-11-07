@@ -12,7 +12,7 @@ Zero third-party dependencies - Python standard library only.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 import datetime
 import hashlib
 import json
@@ -22,19 +22,31 @@ import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
+    # 1. User Management
     "get-msoluser": {
         "target": "Get-MgUser",
         "delegated_scopes": ["User.Read.All"],
         "app_scopes": ["User.Read.All"],
-        "param_map": {"searchstring": "Filter"},
+        "param_map": {
+            "userprincipalname": "UserId",
+            "objectid": "UserId",
+            "searchstring": "Filter",
+            "maxresults": "Top"
+        },
+        "single_id_params": ["userid"],
         "requires_all": True,
-        "notes": "Add -All to prevent silent 100-user truncation. Translate -SearchString to OData -Filter."
+        "notes": "Add -All to prevent silent 100-user truncation. Translate -SearchString to OData -Filter and -UserPrincipalName to -UserId."
     },
     "get-azureaduser": {
         "target": "Get-MgUser",
         "delegated_scopes": ["User.Read.All"],
         "app_scopes": ["User.Read.All"],
-        "param_map": {"objectid": "UserId", "searchstring": "Filter"},
+        "param_map": {
+            "objectid": "UserId",
+            "searchstring": "Filter",
+            "top": "Top"
+        },
+        "single_id_params": ["userid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -UserId. Add -All for multi-user queries."
     },
@@ -43,6 +55,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
         "param_map": {"forcechangepassword": "ForceChangePasswordNextSignIn"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Password profile must be passed via hashtable @{Password='...'; ForceChangePasswordNextSignIn=$true}."
     },
@@ -51,6 +64,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Requires -DisplayName, -MailNickname, -UserPrincipalName, and -AccountEnabled:$true."
     },
@@ -58,7 +72,8 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Update-MgUser",
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
-        "param_map": {"userprincipalname": "UserId"},
+        "param_map": {"userprincipalname": "UserId", "objectid": "UserId"},
+        "single_id_params": ["userid"],
         "requires_all": False,
         "notes": "Target user using -UserId <UPN/ID>. Property names match Graph REST schema."
     },
@@ -67,6 +82,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
         "param_map": {"objectid": "UserId"},
+        "single_id_params": ["userid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -UserId."
     },
@@ -74,7 +90,8 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Remove-MgUser",
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
-        "param_map": {"userprincipalname": "UserId"},
+        "param_map": {"userprincipalname": "UserId", "objectid": "UserId"},
+        "single_id_params": ["userid"],
         "requires_all": False,
         "notes": "Soft-deletes user account into directory deleted items."
     },
@@ -83,30 +100,119 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
         "param_map": {"objectid": "UserId"},
+        "single_id_params": ["userid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -UserId."
     },
+    "restore-msoluser": {
+        "target": "Restore-MgDirectoryDeletedItem",
+        "delegated_scopes": ["Directory.ReadWrite.All"],
+        "app_scopes": ["Directory.ReadWrite.All"],
+        "param_map": {"objectid": "DirectoryObjectId", "userprincipalname": "DirectoryObjectId"},
+        "single_id_params": ["directoryobjectid"],
+        "requires_all": False,
+        "notes": "Pass -DirectoryObjectId <GUID> to restore soft-deleted user."
+    },
+    "restore-azureadmsdeleteddirectoryobject": {
+        "target": "Restore-MgDirectoryDeletedItem",
+        "delegated_scopes": ["Directory.ReadWrite.All"],
+        "app_scopes": ["Directory.ReadWrite.All"],
+        "param_map": {"id": "DirectoryObjectId"},
+        "single_id_params": ["directoryobjectid"],
+        "requires_all": False,
+        "notes": "Replace -Id with -DirectoryObjectId."
+    },
+    "get-msoluserbymanager": {
+        "target": "Get-MgUserManager",
+        "delegated_scopes": ["User.Read.All"],
+        "app_scopes": ["User.Read.All"],
+        "param_map": {"userprincipalname": "UserId", "objectid": "UserId"},
+        "single_id_params": ["userid"],
+        "requires_all": False,
+        "notes": "Retrieve manager directory object using -UserId <UPN/ID>."
+    },
+    "get-azureadusermanager": {
+        "target": "Get-MgUserManager",
+        "delegated_scopes": ["User.Read.All"],
+        "app_scopes": ["User.Read.All"],
+        "param_map": {"objectid": "UserId"},
+        "single_id_params": ["userid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -UserId."
+    },
+    "set-azureadusermanager": {
+        "target": "Set-MgUserManagerByRef",
+        "delegated_scopes": ["User.ReadWrite.All"],
+        "app_scopes": ["User.ReadWrite.All"],
+        "param_map": {"objectid": "UserId", "refobjectid": "AdditionalProperties"},
+        "single_id_params": ["userid"],
+        "requires_all": False,
+        "notes": "Pass -UserId <ID> -BodyParameter @{'@odata.id'='https://graph.microsoft.com/v1.0/users/<ManagerId>'}."
+    },
+    "revoke-azureaduserallrefreshtoken": {
+        "target": "Revoke-MgUserSignInSession",
+        "delegated_scopes": ["User.ReadWrite.All"],
+        "app_scopes": ["User.ReadWrite.All"],
+        "param_map": {"objectid": "UserId"},
+        "single_id_params": ["userid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -UserId to invalidate active refresh tokens."
+    },
+
+    # 2. Licensing & Subscriptions
     "get-msolaccountsku": {
         "target": "Get-MgSubscribedSku",
         "delegated_scopes": ["Organization.Read.All"],
         "app_scopes": ["Organization.Read.All"],
         "param_map": {},
+        "single_id_params": ["subscribedskuid"],
         "requires_all": True,
         "notes": "Returns tenant licensing SKUs, total units, and consumed units. Add -All."
+    },
+    "get-msolsubscription": {
+        "target": "Get-MgSubscribedSku",
+        "delegated_scopes": ["Organization.Read.All"],
+        "app_scopes": ["Organization.Read.All"],
+        "param_map": {"subscriptionid": "SubscribedSkuId"},
+        "single_id_params": ["subscribedskuid"],
+        "requires_all": True,
+        "notes": "Modern Graph models subscriptions via Get-MgSubscribedSku. Add -All."
+    },
+    "get-azureadsubscribedsku": {
+        "target": "Get-MgSubscribedSku",
+        "delegated_scopes": ["Organization.Read.All"],
+        "app_scopes": ["Organization.Read.All"],
+        "param_map": {"objectid": "SubscribedSkuId"},
+        "single_id_params": ["subscribedskuid"],
+        "requires_all": True,
+        "notes": "Replace -ObjectId with -SubscribedSkuId. Add -All."
     },
     "set-msoluserlicense": {
         "target": "Set-MgUserLicense",
         "delegated_scopes": ["User.ReadWrite.All"],
         "app_scopes": ["User.ReadWrite.All"],
-        "param_map": {"userprincipalname": "UserId"},
+        "param_map": {"userprincipalname": "UserId", "objectid": "UserId"},
+        "single_id_params": ["userid"],
         "requires_all": False,
         "notes": "Requires SkuId GUIDs rather than string names. Pass -AddLicenses @(@{SkuId='GUID'}) -RemoveLicenses @()."
     },
+    "set-azureaduserlicense": {
+        "target": "Set-MgUserLicense",
+        "delegated_scopes": ["User.ReadWrite.All"],
+        "app_scopes": ["User.ReadWrite.All"],
+        "param_map": {"objectid": "UserId"},
+        "single_id_params": ["userid"],
+        "requires_all": False,
+        "notes": "Pass -UserId <ID> -AddLicenses @(@{SkuId='GUID'}) -RemoveLicenses @()."
+    },
+
+    # 3. Group Management
     "get-msolgroup": {
         "target": "Get-MgGroup",
         "delegated_scopes": ["Group.Read.All"],
         "app_scopes": ["Group.Read.All"],
-        "param_map": {"searchstring": "Filter"},
+        "param_map": {"objectid": "GroupId", "searchstring": "Filter", "maxresults": "Top"},
+        "single_id_params": ["groupid"],
         "requires_all": True,
         "notes": "Add -All to retrieve all groups. Use OData -Filter."
     },
@@ -115,6 +221,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.Read.All"],
         "app_scopes": ["Group.Read.All"],
         "param_map": {"objectid": "GroupId", "searchstring": "Filter"},
+        "single_id_params": ["groupid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -GroupId. Add -All."
     },
@@ -123,6 +230,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Specify -DisplayName, -MailNickname, -MailEnabled:$false, -SecurityEnabled:$true."
     },
@@ -131,6 +239,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Specify -DisplayName, -MailNickname, -MailEnabled, -SecurityEnabled."
     },
@@ -139,6 +248,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {"objectid": "GroupId"},
+        "single_id_params": ["groupid"],
         "requires_all": False,
         "notes": "Target group with -GroupId <ID>."
     },
@@ -147,6 +257,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {"objectid": "GroupId"},
+        "single_id_params": ["groupid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -GroupId."
     },
@@ -155,6 +266,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {"objectid": "GroupId"},
+        "single_id_params": ["groupid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -GroupId."
     },
@@ -163,6 +275,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Group.ReadWrite.All"],
         "app_scopes": ["Group.ReadWrite.All"],
         "param_map": {"objectid": "GroupId"},
+        "single_id_params": ["groupid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -GroupId."
     },
@@ -170,7 +283,8 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Get-MgGroupMember",
         "delegated_scopes": ["GroupMember.Read.All"],
         "app_scopes": ["GroupMember.Read.All"],
-        "param_map": {"groupobjectid": "GroupId"},
+        "param_map": {"groupobjectid": "GroupId", "objectid": "GroupId"},
+        "single_id_params": [],
         "requires_all": True,
         "notes": "Add -All. Returns directory objects."
     },
@@ -179,6 +293,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["GroupMember.Read.All"],
         "app_scopes": ["GroupMember.Read.All"],
         "param_map": {"objectid": "GroupId"},
+        "single_id_params": [],
         "requires_all": True,
         "notes": "Replace -ObjectId with -GroupId. Add -All."
     },
@@ -187,6 +302,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["GroupMember.ReadWrite.All"],
         "app_scopes": ["GroupMember.ReadWrite.All"],
         "param_map": {"groupobjectid": "GroupId", "groupmemberobjectid": "DirectoryObjectId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Pass -GroupId <ID> -DirectoryObjectId <ID>."
     },
@@ -195,6 +311,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["GroupMember.ReadWrite.All"],
         "app_scopes": ["GroupMember.ReadWrite.All"],
         "param_map": {"objectid": "GroupId", "refobjectid": "DirectoryObjectId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Replace -ObjectId with -GroupId and -RefObjectId with -DirectoryObjectId."
     },
@@ -203,6 +320,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["GroupMember.ReadWrite.All"],
         "app_scopes": ["GroupMember.ReadWrite.All"],
         "param_map": {"groupobjectid": "GroupId", "groupmemberobjectid": "DirectoryObjectId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Specify -GroupId and -DirectoryObjectId."
     },
@@ -211,14 +329,45 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["GroupMember.ReadWrite.All"],
         "app_scopes": ["GroupMember.ReadWrite.All"],
         "param_map": {"objectid": "GroupId", "memberid": "DirectoryObjectId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Replace -ObjectId with -GroupId and -MemberId with -DirectoryObjectId."
     },
+    "get-azureadgroupowner": {
+        "target": "Get-MgGroupOwner",
+        "delegated_scopes": ["Group.Read.All"],
+        "app_scopes": ["Group.Read.All"],
+        "param_map": {"objectid": "GroupId"},
+        "single_id_params": [],
+        "requires_all": True,
+        "notes": "Replace -ObjectId with -GroupId. Add -All."
+    },
+    "add-azureadgroupowner": {
+        "target": "New-MgGroupOwnerByRef",
+        "delegated_scopes": ["Group.ReadWrite.All"],
+        "app_scopes": ["Group.ReadWrite.All"],
+        "param_map": {"objectid": "GroupId", "refobjectid": "DirectoryObjectId"},
+        "single_id_params": [],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -GroupId and -RefObjectId with -DirectoryObjectId."
+    },
+    "remove-azureadgroupowner": {
+        "target": "Remove-MgGroupOwnerByRef",
+        "delegated_scopes": ["Group.ReadWrite.All"],
+        "app_scopes": ["Group.ReadWrite.All"],
+        "param_map": {"objectid": "GroupId", "ownerid": "DirectoryObjectId"},
+        "single_id_params": [],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -GroupId and -OwnerId with -DirectoryObjectId."
+    },
+
+    # 4. Service Principals & Applications
     "get-azureadserviceprincipal": {
         "target": "Get-MgServicePrincipal",
         "delegated_scopes": ["Application.Read.All"],
         "app_scopes": ["Application.Read.All"],
-        "param_map": {"objectid": "ServicePrincipalId"},
+        "param_map": {"objectid": "ServicePrincipalId", "searchstring": "Filter"},
+        "single_id_params": ["serviceprincipalid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -ServicePrincipalId. Add -All."
     },
@@ -227,14 +376,25 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Specify -AppId <GUID>."
+    },
+    "set-azureadserviceprincipal": {
+        "target": "Update-MgServicePrincipal",
+        "delegated_scopes": ["Application.ReadWrite.All"],
+        "app_scopes": ["Application.ReadWrite.All"],
+        "param_map": {"objectid": "ServicePrincipalId"},
+        "single_id_params": ["serviceprincipalid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -ServicePrincipalId."
     },
     "remove-azureadserviceprincipal": {
         "target": "Remove-MgServicePrincipal",
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ServicePrincipalId"},
+        "single_id_params": ["serviceprincipalid"],
         "requires_all": False,
         "notes": "Replace -ObjectId with -ServicePrincipalId."
     },
@@ -242,7 +402,8 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Get-MgApplication",
         "delegated_scopes": ["Application.Read.All"],
         "app_scopes": ["Application.Read.All"],
-        "param_map": {"objectid": "ApplicationId"},
+        "param_map": {"objectid": "ApplicationId", "searchstring": "Filter"},
+        "single_id_params": ["applicationid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -ApplicationId. Add -All."
     },
@@ -251,14 +412,34 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Specify -DisplayName and identifier URIs."
+    },
+    "set-azureadapplication": {
+        "target": "Update-MgApplication",
+        "delegated_scopes": ["Application.ReadWrite.All"],
+        "app_scopes": ["Application.ReadWrite.All"],
+        "param_map": {"objectid": "ApplicationId"},
+        "single_id_params": ["applicationid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -ApplicationId."
+    },
+    "remove-azureadapplication": {
+        "target": "Remove-MgApplication",
+        "delegated_scopes": ["Application.ReadWrite.All"],
+        "app_scopes": ["Application.ReadWrite.All"],
+        "param_map": {"objectid": "ApplicationId"},
+        "single_id_params": ["applicationid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -ApplicationId."
     },
     "new-azureadapplicationkeycredential": {
         "target": "Add-MgApplicationPassword",
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ApplicationId"},
+        "single_id_params": ["applicationid"],
         "requires_all": False,
         "notes": "Pass -ApplicationId <ID> -PasswordCredential @{DisplayName='...'}. Plain text secret returned only upon creation."
     },
@@ -267,6 +448,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ApplicationId"},
+        "single_id_params": ["applicationid"],
         "requires_all": False,
         "notes": "Pass -ApplicationId <ID> -PasswordCredential @{DisplayName='...'}. Plain text secret returned only upon creation."
     },
@@ -275,6 +457,16 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ApplicationId", "customkeyidentifier": "KeyId"},
+        "single_id_params": ["applicationid"],
+        "requires_all": False,
+        "notes": "Pass -ApplicationId <ID> -KeyId <GUID>."
+    },
+    "remove-azureadapplicationpasswordcredential": {
+        "target": "Remove-MgApplicationPassword",
+        "delegated_scopes": ["Application.ReadWrite.All"],
+        "app_scopes": ["Application.ReadWrite.All"],
+        "param_map": {"objectid": "ApplicationId", "keyid": "KeyId"},
+        "single_id_params": ["applicationid"],
         "requires_all": False,
         "notes": "Pass -ApplicationId <ID> -KeyId <GUID>."
     },
@@ -283,6 +475,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ServicePrincipalId"},
+        "single_id_params": ["serviceprincipalid"],
         "requires_all": False,
         "notes": "Pass -ServicePrincipalId <ID> -PasswordCredential @{DisplayName='...'}. Plain text secret returned only upon creation."
     },
@@ -291,14 +484,18 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Application.ReadWrite.All"],
         "app_scopes": ["Application.ReadWrite.All"],
         "param_map": {"objectid": "ServicePrincipalId", "keyid": "KeyId"},
+        "single_id_params": ["serviceprincipalid"],
         "requires_all": False,
         "notes": "Pass -ServicePrincipalId <ID> -KeyId <GUID>."
     },
+
+    # 5. Directory Roles & Administrative Units
     "get-msolrole": {
         "target": "Get-MgDirectoryRole",
         "delegated_scopes": ["RoleManagement.Read.Directory"],
         "app_scopes": ["RoleManagement.Read.Directory"],
-        "param_map": {},
+        "param_map": {"objectid": "DirectoryRoleId"},
+        "single_id_params": ["directoryroleid"],
         "requires_all": True,
         "notes": "Returns directory roles. Add -All."
     },
@@ -307,6 +504,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["RoleManagement.Read.Directory"],
         "app_scopes": ["RoleManagement.Read.Directory"],
         "param_map": {"objectid": "DirectoryRoleId"},
+        "single_id_params": ["directoryroleid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -DirectoryRoleId. Add -All."
     },
@@ -315,6 +513,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["RoleManagement.Read.Directory"],
         "app_scopes": ["RoleManagement.Read.Directory"],
         "param_map": {"roleobjectid": "DirectoryRoleId"},
+        "single_id_params": [],
         "requires_all": True,
         "notes": "Specify -DirectoryRoleId <ID>. Add -All."
     },
@@ -323,6 +522,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["RoleManagement.Read.Directory"],
         "app_scopes": ["RoleManagement.Read.Directory"],
         "param_map": {"objectid": "DirectoryRoleId"},
+        "single_id_params": [],
         "requires_all": True,
         "notes": "Replace -ObjectId with -DirectoryRoleId. Add -All."
     },
@@ -330,7 +530,11 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "New-MgDirectoryRoleMemberByRef",
         "delegated_scopes": ["RoleManagement.ReadWrite.Directory"],
         "app_scopes": ["RoleManagement.ReadWrite.Directory"],
-        "param_map": {"roleobjectid": "DirectoryRoleId"},
+        "param_map": {
+            "roleobjectid": "DirectoryRoleId",
+            "rolememberobjectid": "DirectoryObjectId"
+        },
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Pass -DirectoryRoleId <ID> -DirectoryObjectId <ID>."
     },
@@ -339,14 +543,57 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["RoleManagement.ReadWrite.Directory"],
         "app_scopes": ["RoleManagement.ReadWrite.Directory"],
         "param_map": {"objectid": "DirectoryRoleId", "refobjectid": "DirectoryObjectId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Replace -ObjectId with -DirectoryRoleId and -RefObjectId with -DirectoryObjectId."
     },
+    "remove-msolrolemember": {
+        "target": "Remove-MgDirectoryRoleMemberDirectoryObjectByRef",
+        "delegated_scopes": ["RoleManagement.ReadWrite.Directory"],
+        "app_scopes": ["RoleManagement.ReadWrite.Directory"],
+        "param_map": {
+            "roleobjectid": "DirectoryRoleId",
+            "rolememberobjectid": "DirectoryObjectId"
+        },
+        "single_id_params": [],
+        "requires_all": False,
+        "notes": "Pass -DirectoryRoleId <ID> -DirectoryObjectId <ID>."
+    },
+    "remove-azureaddirectoryrolemember": {
+        "target": "Remove-MgDirectoryRoleMemberDirectoryObjectByRef",
+        "delegated_scopes": ["RoleManagement.ReadWrite.Directory"],
+        "app_scopes": ["RoleManagement.ReadWrite.Directory"],
+        "param_map": {"objectid": "DirectoryRoleId", "memberid": "DirectoryObjectId"},
+        "single_id_params": [],
+        "requires_all": False,
+        "notes": "Specify -DirectoryRoleId and -DirectoryObjectId."
+    },
+    "get-azureadadministrativeunit": {
+        "target": "Get-MgAdministrativeUnit",
+        "delegated_scopes": ["AdministrativeUnit.Read.All"],
+        "app_scopes": ["AdministrativeUnit.Read.All"],
+        "param_map": {"objectid": "AdministrativeUnitId"},
+        "single_id_params": ["administrativeunitid"],
+        "requires_all": True,
+        "notes": "Replace -ObjectId with -AdministrativeUnitId. Add -All."
+    },
+    "get-azureadadministrativeunitmember": {
+        "target": "Get-MgAdministrativeUnitMember",
+        "delegated_scopes": ["AdministrativeUnit.Read.All"],
+        "app_scopes": ["AdministrativeUnit.Read.All"],
+        "param_map": {"objectid": "AdministrativeUnitId"},
+        "single_id_params": [],
+        "requires_all": True,
+        "notes": "Replace -ObjectId with -AdministrativeUnitId. Add -All."
+    },
+
+    # 6. Devices, Contacts, Domains & Organization
     "get-msoldevice": {
         "target": "Get-MgDevice",
         "delegated_scopes": ["Device.Read.All"],
         "app_scopes": ["Device.Read.All"],
-        "param_map": {},
+        "param_map": {"objectid": "DeviceId"},
+        "single_id_params": ["deviceid"],
         "requires_all": True,
         "notes": "Returns registered devices. Add -All."
     },
@@ -354,15 +601,62 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Get-MgDevice",
         "delegated_scopes": ["Device.Read.All"],
         "app_scopes": ["Device.Read.All"],
-        "param_map": {"objectid": "DeviceId"},
+        "param_map": {"objectid": "DeviceId", "searchstring": "Filter"},
+        "single_id_params": ["deviceid"],
         "requires_all": True,
         "notes": "Replace -ObjectId with -DeviceId. Add -All."
+    },
+    "set-azureaddevice": {
+        "target": "Update-MgDevice",
+        "delegated_scopes": ["Device.ReadWrite.All"],
+        "app_scopes": ["Device.ReadWrite.All"],
+        "param_map": {"objectid": "DeviceId"},
+        "single_id_params": ["deviceid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -DeviceId."
+    },
+    "remove-msoldevice": {
+        "target": "Remove-MgDevice",
+        "delegated_scopes": ["Device.ReadWrite.All"],
+        "app_scopes": ["Device.ReadWrite.All"],
+        "param_map": {"objectid": "DeviceId"},
+        "single_id_params": ["deviceid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -DeviceId."
+    },
+    "remove-azureaddevice": {
+        "target": "Remove-MgDevice",
+        "delegated_scopes": ["Device.ReadWrite.All"],
+        "app_scopes": ["Device.ReadWrite.All"],
+        "param_map": {"objectid": "DeviceId"},
+        "single_id_params": ["deviceid"],
+        "requires_all": False,
+        "notes": "Replace -ObjectId with -DeviceId."
+    },
+    "get-msolcontact": {
+        "target": "Get-MgContact",
+        "delegated_scopes": ["OrgContact.Read.All"],
+        "app_scopes": ["OrgContact.Read.All"],
+        "param_map": {"objectid": "OrgContactId"},
+        "single_id_params": ["orgcontactid"],
+        "requires_all": True,
+        "notes": "Returns organizational contacts. Add -All."
+    },
+    "get-azureadcontact": {
+        "target": "Get-MgContact",
+        "delegated_scopes": ["OrgContact.Read.All"],
+        "app_scopes": ["OrgContact.Read.All"],
+        "param_map": {"objectid": "OrgContactId"},
+        "single_id_params": ["orgcontactid"],
+        "requires_all": True,
+        "notes": "Replace -ObjectId with -OrgContactId. Add -All."
     },
     "get-msoldomain": {
         "target": "Get-MgDomain",
         "delegated_scopes": ["Domain.Read.All"],
         "app_scopes": ["Domain.Read.All"],
-        "param_map": {},
+        "param_map": {"domainname": "DomainId"},
+        "single_id_params": ["domainid"],
         "requires_all": True,
         "notes": "Returns verified custom domains. Add -All."
     },
@@ -370,7 +664,8 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "target": "Get-MgDomain",
         "delegated_scopes": ["Domain.Read.All"],
         "app_scopes": ["Domain.Read.All"],
-        "param_map": {},
+        "param_map": {"name": "DomainId"},
+        "single_id_params": ["domainid"],
         "requires_all": True,
         "notes": "Returns verified custom domains. Add -All."
     },
@@ -379,6 +674,7 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Organization.Read.All"],
         "app_scopes": ["Organization.Read.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Returns tenant organization metadata."
     },
@@ -387,14 +683,36 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": ["Organization.Read.All"],
         "app_scopes": ["Organization.Read.All"],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Returns tenant organization metadata."
+    },
+
+    # 7. Audit & Authentication
+    "get-azureadauditsigninlogs": {
+        "target": "Get-MgAuditLogSignIn",
+        "delegated_scopes": ["AuditLog.Read.All"],
+        "app_scopes": ["AuditLog.Read.All"],
+        "param_map": {},
+        "single_id_params": [],
+        "requires_all": True,
+        "notes": "Requires AuditLog.Read.All. Add -All or -Top."
+    },
+    "get-azureadauditdirectorylogs": {
+        "target": "Get-MgAuditLogDirectoryAudit",
+        "delegated_scopes": ["AuditLog.Read.All"],
+        "app_scopes": ["AuditLog.Read.All"],
+        "param_map": {},
+        "single_id_params": [],
+        "requires_all": True,
+        "notes": "Requires AuditLog.Read.All. Add -All or -Top."
     },
     "connect-msolservice": {
         "target": "Connect-MgGraph",
         "delegated_scopes": [],
         "app_scopes": [],
         "param_map": {},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Replace with Connect-MgGraph specifying computed least-privilege scopes."
     },
@@ -403,8 +721,18 @@ CMDLET_MAPPINGS: Dict[str, Dict[str, Any]] = {
         "delegated_scopes": [],
         "app_scopes": [],
         "param_map": {"applicationid": "ClientId"},
+        "single_id_params": [],
         "requires_all": False,
         "notes": "Replace with Connect-MgGraph specifying computed least-privilege scopes."
+    },
+    "disconnect-azuread": {
+        "target": "Disconnect-MgGraph",
+        "delegated_scopes": [],
+        "app_scopes": [],
+        "param_map": {},
+        "single_id_params": [],
+        "requires_all": False,
+        "notes": "Replace with Disconnect-MgGraph."
     }
 }
 
@@ -532,14 +860,58 @@ class Sanitizer:
             text
         )
 
-        # 5. Scrub IPv6 addresses
+        # 5. Scrub IPv6 addresses (including bracketed IPv6 with port)
         text = re.sub(
-            r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\bfe80::[0-9a-fA-F:]+\b|\b2[0-9a-fA-F]{3}:[0-9a-fA-F:]+\b",
+            r"\[(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F:]+\](?::\d+)?|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\bfe80::[0-9a-fA-F:]+\b|\b2[0-9a-fA-F]{3}:[0-9a-fA-F:]+\b",
             "2001:db8::1",
             text
         )
 
         return text
+
+
+_QUOTED_LITERAL_RE = re.compile(r'"(?:`."|[^"])*"|\'(?:[^\'])*\'')
+_WORD_TOKEN_RE = re.compile(r"\b[A-Za-z]+-[A-Za-z0-9]+\b")
+_ACCOUNT_SKUID_RE = re.compile(r"(\$[A-Za-z0-9_]+)\.AccountSkuId\b", re.IGNORECASE)
+_ACTIVE_UNITS_RE = re.compile(r"(\$[A-Za-z0-9_]+)\.ActiveUnits\b", re.IGNORECASE)
+_IS_LICENSED_FALSE_RE = re.compile(r"\$_\.IsLicensed\s+-eq\s+\$false\b", re.IGNORECASE)
+_IS_LICENSED_TRUE_RE = re.compile(r"\$_\.IsLicensed\s+-eq\s+\$true\b", re.IGNORECASE)
+_BOUND_LIMIT_RE = re.compile(r"-(?:all|top)\b", re.IGNORECASE)
+_CONNECT_CMD_RE = re.compile(r"\b(Connect-MsolService|Connect-AzureAD)\b", re.IGNORECASE)
+
+
+def _split_inline_comment(line: str) -> Tuple[str, str]:
+    """Splits a PowerShell line into (code_part, inline_comment_part) outside string quotes."""
+    if "#" not in line:
+        return line, ""
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "`" and i + 1 < n:
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            # Ignore <# and #>
+            if (i > 0 and line[i - 1] == "<") or (i + 1 < n and line[i + 1] == ">"):
+                i += 1
+                continue
+            return line[:i], line[i:]
+        i += 1
+    return line, ""
+
+
+def _strip_quoted_literals(code_part: str) -> str:
+    """Replaces contents of quoted strings with empty quotes so cmdlets inside string literals are not misidentified."""
+    if '"' not in code_part and "'" not in code_part:
+        return code_part
+    return _QUOTED_LITERAL_RE.sub('""', code_part)
 
 
 class GraphMigrator:
@@ -564,7 +936,7 @@ class GraphMigrator:
         for idx, line in enumerate(lines, start=1):
             stripped = line.strip()
 
-            # Handle block comments
+            # Handle block comments (<# ... #>)
             if "<#" in stripped:
                 in_block_comment = True
             if in_block_comment:
@@ -576,8 +948,12 @@ class GraphMigrator:
             if stripped.startswith("#"):
                 continue
 
+            # Strip inline comments and string literals before scanning for executable cmdlets
+            code_only, _ = _split_inline_comment(line)
+            unquoted_code = _strip_quoted_literals(code_only)
+
             # Tokenize words to match cmdlets safely on word boundaries
-            tokens = re.findall(r"\b[A-Za-z]+-[A-Za-z0-9]+\b", line)
+            tokens = _WORD_TOKEN_RE.findall(unquoted_code)
             for token in tokens:
                 t_lower = token.lower()
                 if t_lower in CMDLET_MAPPINGS:
@@ -619,31 +995,94 @@ class GraphMigrator:
             modernized_script=modern_code
         )
 
+    def _find_header_and_param_end(self, lines: List[str]) -> Tuple[int, bool]:
+        """Finds the line index immediately after any leading comment blocks and param(...) block."""
+        idx = 0
+        n = len(lines)
+        in_block_comment = False
+        has_param_block = False
+
+        while idx < n:
+            stripped = lines[idx].strip()
+            if not stripped:
+                idx += 1
+                continue
+            if "<#" in stripped:
+                in_block_comment = True
+            if in_block_comment:
+                if "#>" in stripped:
+                    in_block_comment = False
+                idx += 1
+                continue
+            if stripped.startswith("#"):
+                idx += 1
+                continue
+            if re.match(r"^\[CmdletBinding\(.*\)\]$", stripped, re.IGNORECASE):
+                idx += 1
+                continue
+            if re.match(r"^param\s*\(", stripped, re.IGNORECASE):
+                has_param_block = True
+                # Track parentheses until param(...) closes
+                paren_depth = 0
+                while idx < n:
+                    code_part, _ = _split_inline_comment(lines[idx])
+                    unquoted = _strip_quoted_literals(code_part)
+                    paren_depth += unquoted.count("(") - unquoted.count(")")
+                    idx += 1
+                    if paren_depth <= 0:
+                        break
+                break
+            break
+
+        return (idx if has_param_block else 0), has_param_block
+
+    def _modernize_properties(self, code_part: str) -> str:
+        """Modernizes legacy AzureAD/MSOnline property references to Microsoft.Graph SDK properties."""
+        if "." not in code_part:
+            return code_part
+        code_part = _ACCOUNT_SKUID_RE.sub(r"\1.SkuPartNumber", code_part)
+        code_part = _ACTIVE_UNITS_RE.sub(r"\1.PrepaidUnits.Enabled", code_part)
+        if "islicensed" in code_part.lower():
+            code_part = _IS_LICENSED_FALSE_RE.sub(r"($_.AssignedLicenses.Count -eq 0)", code_part)
+            code_part = _IS_LICENSED_TRUE_RE.sub(r"($_.AssignedLicenses.Count -gt 0)", code_part)
+        return code_part
+
     def _generate_modern_script(self, original_lines: List[str], scopes: Set[str]) -> str:
         out_lines: List[str] = []
 
-        # Add Modern Header
         scope_str = ", ".join(f'"{s}"' for s in sorted(list(scopes))) if scopes else '"User.Read.All"'
+        param_end_idx, has_param_block = self._find_header_and_param_end(original_lines)
+
+        # Add Modern Header
         out_lines.append("<#")
-        out_lines.append(f".SYNOPSIS")
+        out_lines.append(".SYNOPSIS")
         out_lines.append(f"    Modernized replacement for {self.script_name} using Microsoft.Graph PowerShell SDK.")
-        out_lines.append(f".DESCRIPTION")
-        out_lines.append(f"    Migrated from legacy AzureAD / MSOnline modules to Microsoft.Graph v2.x.")
+        out_lines.append(".DESCRIPTION")
+        out_lines.append("    Migrated from legacy AzureAD / MSOnline modules to Microsoft.Graph v2.x.")
         out_lines.append(f"    Required least-privilege permission scopes: {', '.join(sorted(list(scopes))) if scopes else 'None'}")
         out_lines.append("#>")
-        out_lines.append("[CmdletBinding()]")
-        out_lines.append("param()")
+
+        if has_param_block:
+            # Emit original leading comments and param(...) block BEFORE Connect-MgGraph so PowerShell syntax is valid
+            for idx in range(param_end_idx):
+                out_lines.append(original_lines[idx])
+        else:
+            out_lines.append("[CmdletBinding()]")
+            out_lines.append("param()")
+
         out_lines.append("")
         out_lines.append("# 1. Verify and establish Microsoft Graph connection with least-privilege scopes")
         out_lines.append("if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {")
-        out_lines.append(f'    Write-Verbose "Connecting to Microsoft Graph with required scopes..."')
-        out_lines.append(f'    Connect-MgGraph -Scopes {scope_str} -NoWelcome')
+        out_lines.append('    Write-Verbose "Connecting to Microsoft Graph with required scopes..."')
+        out_lines.append(f"    Connect-MgGraph -Scopes {scope_str} -NoWelcome")
         out_lines.append("}")
         out_lines.append("")
         out_lines.append("# 2. Execute modernized workload operations")
 
         in_block_comment = False
-        for line in original_lines:
+        active_continuation_info: Optional[Dict[str, Any]] = None
+
+        for line in original_lines[param_end_idx:]:
             stripped = line.strip()
 
             # Preserve block comments
@@ -660,42 +1099,76 @@ class GraphMigrator:
                 out_lines.append(line)
                 continue
 
-            # Handle Connect calls
-            if re.search(r"\b(Connect-MsolService|Connect-AzureAD)\b", line, re.IGNORECASE):
+            code_part, comment_part = _split_inline_comment(line)
+            unquoted_code = _strip_quoted_literals(code_part)
+
+            # Handle Connect / Disconnect calls
+            if "connect-" in unquoted_code.lower() and _CONNECT_CMD_RE.search(unquoted_code):
                 out_lines.append(f"# Replaced legacy connection: {stripped}")
-                out_lines.append(f'# Connect-MgGraph -Scopes {scope_str} -NoWelcome')
+                out_lines.append(f"# Connect-MgGraph -Scopes {scope_str} -NoWelcome")
+                active_continuation_info = None
                 continue
 
-            # Tokenize and match only present cmdlets for maximum throughput
-            tokens = re.findall(r"\b[A-Za-z]+-[A-Za-z0-9]+\b", line)
+            # If we are inside a multiline backtick continuation from a previous line's cmdlet
+            if active_continuation_info is not None:
+                updated_code = code_part
+                for old_param, new_param in active_continuation_info.get("param_map", {}).items():
+                    param_pattern = rf"(-{re.escape(old_param)})\b"
+                    updated_code = re.sub(param_pattern, f"-{new_param}", updated_code, flags=re.IGNORECASE)
+                updated_code = self._modernize_properties(updated_code)
+                sep = " " if (comment_part and not updated_code.endswith(" ")) else ""
+                out_lines.append(updated_code + sep + comment_part)
+                if not updated_code.rstrip().endswith("`"):
+                    active_continuation_info = None
+                continue
+
+            # Tokenize unquoted code to match only real executable cmdlets
+            tokens = _WORD_TOKEN_RE.findall(unquoted_code)
             matched_cmdlets = [t.lower() for t in tokens if t.lower() in CMDLET_MAPPINGS]
 
             if not matched_cmdlets:
-                out_lines.append(line)
+                out_lines.append(self._modernize_properties(code_part) + comment_part)
                 continue
 
-            updated_line = line
+            updated_code = code_part
             for legacy in matched_cmdlets:
                 info = CMDLET_MAPPINGS[legacy]
                 pattern = rf"\b{re.escape(legacy)}\b"
-                # Replace cmdlet name preserving exact case of target
-                updated_line = re.sub(pattern, info["target"], updated_line, flags=re.IGNORECASE)
+                updated_code = re.sub(pattern, info["target"], updated_code, flags=re.IGNORECASE)
 
-                # Update parameter names
+                # Update parameter names on this line
+                lower_for_params = updated_code.lower()
                 for old_param, new_param in info.get("param_map", {}).items():
-                    param_pattern = rf"(-{re.escape(old_param)})\b"
-                    updated_line = re.sub(param_pattern, f"-{new_param}", updated_line, flags=re.IGNORECASE)
+                    if f"-{old_param}" in lower_for_params:
+                        param_pattern = rf"(-{re.escape(old_param)})\b"
+                        updated_code = re.sub(param_pattern, f"-{new_param}", updated_code, flags=re.IGNORECASE)
 
-                # Auto-inject -All for unbounded query commands if not already present
-                if info.get("requires_all") and "-all" not in updated_line.lower() and "-top" not in updated_line.lower() and "-userid" not in updated_line.lower() and "-groupid" not in updated_line.lower():
-                    if not re.search(r"\s-All\b", updated_line, re.IGNORECASE):
-                        if "|" in updated_line:
-                            parts = updated_line.split("|", 1)
-                            updated_line = f"{parts[0].rstrip()} -All |{parts[1]}"
+                # Check if this command continues onto the next line via trailing backtick `
+                is_continued = updated_code.rstrip().endswith("`")
+                if is_continued:
+                    active_continuation_info = info
+
+                # Determine whether -All should be auto-injected
+                if info.get("requires_all"):
+                    lower_code = updated_code.lower()
+                    single_id_params = info.get("single_id_params", [])
+                    has_single_id = any(f"-{p}" in lower_code and re.search(rf"-{re.escape(p)}\b", lower_code) for p in single_id_params)
+                    has_bound_limit = bool(_BOUND_LIMIT_RE.search(lower_code))
+
+                    if not has_single_id and not has_bound_limit:
+                        if is_continued:
+                            # Insert -All before the trailing backtick `
+                            trimmed_code = updated_code.rstrip()
+                            updated_code = trimmed_code[:-1].rstrip() + " -All `"
+                        elif "|" in updated_code:
+                            parts = updated_code.split("|", 1)
+                            updated_code = f"{parts[0].rstrip()} -All |{parts[1]}"
                         else:
-                            updated_line = f"{updated_line.rstrip()} -All"
+                            updated_code = f"{updated_code.rstrip()} -All"
 
-            out_lines.append(updated_line)
+            updated_code = self._modernize_properties(updated_code)
+            sep = " " if (comment_part and not updated_code.endswith(" ")) else ""
+            out_lines.append(updated_code + sep + comment_part)
 
         return "\n".join(out_lines)
 
@@ -707,7 +1180,7 @@ def format_markdown(analysis: MigrationAnalysis, sanitize: bool = False) -> str:
     out.append(f"- **Source Script:** `{analysis.script_name}`")
     out.append(f"- **Migration Timestamp (UTC):** `{analysis.timestamp_utc}`")
     out.append(f"- **Total Deprecated Cmdlet Invocations:** {analysis.total_legacy_calls}")
-    out.append(f"- **Target Module:** `Microsoft.Graph` (v2.x)")
+    out.append("- **Target Module:** `Microsoft.Graph` (v2.x)")
     out.append(f"- **Data Sanitization:** {'Active (SHA-256 Hashes, RFC 5737 Test IPs)' if sanitize else 'Disabled'}")
     out.append("")
 
@@ -760,11 +1233,11 @@ def format_markdown(analysis: MigrationAnalysis, sanitize: bool = False) -> str:
     out.append("   ```powershell")
     out.append("   Get-InstalledModule Microsoft.Graph -ErrorAction SilentlyContinue")
     out.append("   ```")
-    out.append("2. **Validate Scopes:** Ensure your executing identity or app registration has been granted the consent for:")
-    scope_display = " ".join(f"-Scopes '{s}'" for s in analysis.required_delegated_scopes) if analysis.required_delegated_scopes else "-Scopes 'User.Read.All'"
-    out.append(f"   ```powershell")
-    out.append(f"   Connect-MgGraph {scope_display}")
-    out.append(f"   ```")
+    out.append("2. **Validate Scopes:** Ensure your executing identity or app registration has been granted consent for:")
+    scope_list_str = ", ".join(f"'{s}'" for s in analysis.required_delegated_scopes) if analysis.required_delegated_scopes else "'User.Read.All'"
+    out.append("   ```powershell")
+    out.append(f"   Connect-MgGraph -Scopes {scope_list_str}")
+    out.append("   ```")
     out.append("3. **Execute in Non-Production:** Run the modernized script with `-Verbose` in a staging tenant or against synthetic test accounts prior to updating production scheduled tasks.")
     out.append("4. **Pagination Check:** Confirm that queries returning collections retrieve the expected total record count across tenant boundaries.")
 
@@ -798,20 +1271,20 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Read input
+    # Read input (using utf-8-sig to strip any Windows PowerShell UTF-8 BOM \ufeff)
     script_name = "PastedScript.ps1"
     if args.input == "-":
         if sys.stdin.isatty():
             sys.stderr.write("Error: No input specified and stdin is empty.\n")
             return 1
-        content = sys.stdin.read()
+        content = sys.stdin.read().lstrip("\ufeff")
     else:
         p = Path(args.input)
         if not p.exists():
             sys.stderr.write(f"Error: Input file not found: {p}\n")
             return 1
         script_name = p.name
-        content = p.read_text(encoding="utf-8", errors="replace")
+        content = p.read_text(encoding="utf-8-sig", errors="replace").lstrip("\ufeff")
 
     # If input is JSON inventory from Scan-LegacyGraphCmdlets.ps1
     trimmed = content.strip()
@@ -819,6 +1292,8 @@ def main() -> int:
         try:
             data = json.loads(trimmed)
             findings_raw = data.get("Findings", [])
+            if isinstance(findings_raw, dict):
+                findings_raw = [findings_raw]
             lines = [f.get("RawCommand", "") for f in findings_raw if isinstance(f, dict)]
             content = "\n".join(lines)
         except Exception:

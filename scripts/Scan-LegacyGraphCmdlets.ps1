@@ -55,9 +55,11 @@ foreach ($file in $FilesToScan) {
 
 $Summary = [PSCustomObject]@{
     TotalLegacyCalls = $Findings.Count
-    UniqueCmdlets    = ($Findings | Select-Object -ExpandProperty Cmdlet -Unique)
-    Findings         = $Findings
+    UniqueCmdlets    = @($Findings | Select-Object -ExpandProperty Cmdlet -Unique)
+    Findings         = @($Findings)
 }
 
-$Summary | ConvertTo-Json -Depth 5 | Out-File -FilePath $OutputPath -Encoding utf8
-Write-Host "Found $($Findings.Count) legacy cmdlet references across $($FilesToScan.Count) files. Saved to $OutputPath" -ForegroundColor Green
+$JsonContent = $Summary | ConvertTo-Json -Depth 5
+$ResolvedOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
+[System.IO.File]::WriteAllText($ResolvedOut, $JsonContent, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "Found $($Findings.Count) legacy cmdlet references across $(@($FilesToScan).Count) files. Saved to $OutputPath" -ForegroundColor Green

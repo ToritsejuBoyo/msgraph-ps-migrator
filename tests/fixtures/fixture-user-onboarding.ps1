@@ -34,3 +34,4 @@ if (-not $existingUser) {
     Write-Output "User already exists. Updating department."
     Set-MsolUser -UserPrincipalName $UserPrincipalName -Department $Department
 }
+
