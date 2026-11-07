@@ -825,42 +825,74 @@ class Sanitizer:
         if not self.enabled or not text:
             return text
 
-        # 1. Scrub passwords, secrets, tokens (assignments and parameters)
+        # 0. ConvertTo-SecureString plaintext literals
         text = re.sub(
-            r"(password|secret|token|api[_-]?key|client[_-]?secret|app[_-]?secret|pass)\s*[:=]\s*(?:(['\"][^'\"]*['\"])|([^\s\n\r,;]+))",
-            r"\1: [REDACTED-SECRET]",
+            r'(ConvertTo-SecureString\s+(?:-String\s+)?)(["\'][^"\']+["\']|[^\s]+)(\s+-AsPlainText)',
+            r'\1"[REDACTED-SECRET]"\3',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # 1. JWT bearer tokens and raw JWTs
+        text = re.sub(
+            r'Bearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+',
+            'Bearer "[REDACTED-TOKEN]"',
             text,
             flags=re.IGNORECASE
         )
         text = re.sub(
-            r"(-(?:password|secret|token|api[_-]?key|client[_-]?secret|certificatepassword|pass)\s+)(?:(['\"][^'\"]*['\"])|([^\s]+))",
+            r'["\']eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+["\']',
+            '"[REDACTED-TOKEN]"',
+            text
+        )
+
+        # 2. Variable assignments: $secret = "...", $token='...', $password=...
+        text = re.sub(
+            r'(\$(?:password|secret|token|api[_-]?key|client[_-]?secret|app[_-]?secret)\w*\s*=\s*)(?:(["\'][^"\']*["\'])|([A-Za-z0-9_\-\.]+))',
             r'\1"[REDACTED-SECRET]"',
             text,
             flags=re.IGNORECASE
         )
 
-        # 2. Scrub emails / UPNs
+        # 3. Hashtable entries or parameter pairs: Password = "...", Secret: "..."
         text = re.sub(
-            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-            lambda m: self.sanitize_upn(m.group(0)),
-            text
+            r'(\b(?:password|secret|token|api[_-]?key|client[_-]?secret|app[_-]?secret|pass)\s*([:=])\s*)(?:(["\'][^"\']*["\'])|([A-Za-z0-9_\-\.]+))',
+            r'\1"[REDACTED-SECRET]"',
+            text,
+            flags=re.IGNORECASE
         )
 
-        # 3. Scrub GUIDs
+        # 4. Cmdlet parameters: -Password "...", -Secret '...', etc.
+        text = re.sub(
+            r'(-(?:password|secret|token|api[_-]?key|client[_-]?secret|certificatepassword|pass)\s+)(?:(["\'][^"\']*["\'])|([^\s]+))',
+            r'\1"[REDACTED-SECRET]"',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # 5. Unicode / IDN UPNs & Emails (bounded quantifier prevents ReDoS backtracking)
+        text = re.sub(
+            r'(?<![\w._%+-])[\w._%+-]{1,64}@[\w.-]{1,255}\.[\w-]{2,24}\b',
+            lambda m: self.sanitize_upn(m.group(0)),
+            text,
+            flags=re.UNICODE
+        )
+
+        # 6. Scrub GUIDs
         text = re.sub(
             r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
             lambda m: self.sanitize_guid(m.group(0)),
             text
         )
 
-        # 4. Scrub IPv4 addresses
+        # 7. Scrub IPv4 addresses
         text = re.sub(
             r"\b(?!127\.0\.0\.1|0\.0\.0\.0|198\.51\.100\.|192\.0\.2\.)(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])\.(?:\d{1,3}\.){2}(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])\b",
             lambda m: self.sanitize_ip(m.group(0)),
             text
         )
 
-        # 5. Scrub IPv6 addresses (including bracketed IPv6 with port)
+        # 8. Scrub IPv6 addresses (including bracketed IPv6 with port)
         text = re.sub(
             r"\[(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F:]+\](?::\d+)?|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\bfe80::[0-9a-fA-F:]+\b|\b2[0-9a-fA-F]{3}:[0-9a-fA-F:]+\b",
             "2001:db8::1",
@@ -870,7 +902,7 @@ class Sanitizer:
         return text
 
 
-_QUOTED_LITERAL_RE = re.compile(r'"(?:`."|[^"])*"|\'(?:[^\'])*\'')
+_QUOTED_LITERAL_RE = re.compile(r'"(?:`."|[^"])*"' + r"|'(?:[^'])*'")
 _WORD_TOKEN_RE = re.compile(r"\b[A-Za-z]+-[A-Za-z0-9]+\b")
 _ACCOUNT_SKUID_RE = re.compile(r"(\$[A-Za-z0-9_]+)\.AccountSkuId\b", re.IGNORECASE)
 _ACTIVE_UNITS_RE = re.compile(r"(\$[A-Za-z0-9_]+)\.ActiveUnits\b", re.IGNORECASE)
@@ -933,23 +965,48 @@ class GraphMigrator:
         unique_legacy: Set[str] = set()
 
         in_block_comment = False
+        in_here_string: Optional[str] = None
+
         for idx, line in enumerate(lines, start=1):
             stripped = line.strip()
 
-            # Handle block comments (<# ... #>)
-            if "<#" in stripped:
-                in_block_comment = True
-            if in_block_comment:
-                if "#>" in stripped:
-                    in_block_comment = False
+            # Handle here-strings (@" ... "@ and @' ... '@)
+            if in_here_string is not None:
+                if stripped == f"{in_here_string}@" or stripped == '"@' or stripped == "'@":
+                    in_here_string = None
+                continue
+            if line.rstrip().endswith('@"') or re.search(r'=\s*@"\s*$', line):
+                in_here_string = '"'
+                continue
+            elif line.rstrip().endswith("@'") or re.search(r"=\s*@'\s*$", line):
+                in_here_string = "'"
                 continue
 
-            # Skip single-line comments
-            if stripped.startswith("#"):
+            # Handle block comments (<# ... #>) outside strings
+            code_line = line
+            if in_block_comment:
+                if "#>" in line:
+                    in_block_comment = False
+                    code_line = line.split("#>", 1)[1]
+                else:
+                    continue
+
+            # Strip any inline block comments like <# ... #>
+            if "<#" in code_line:
+                masked = _strip_quoted_literals(code_line)
+                if "<#" in masked:
+                    if "#>" in masked:
+                        code_line = re.sub(r"<#.*?#>", "", code_line)
+                    else:
+                        in_block_comment = True
+                        code_line = code_line[:code_line.index("<#")]
+
+            stripped_code = code_line.strip()
+            if not stripped_code or stripped_code.startswith("#"):
                 continue
 
             # Strip inline comments and string literals before scanning for executable cmdlets
-            code_only, _ = _split_inline_comment(line)
+            code_only, _ = _split_inline_comment(code_line)
             unquoted_code = _strip_quoted_literals(code_only)
 
             # Tokenize words to match cmdlets safely on word boundaries
@@ -962,6 +1019,9 @@ class GraphMigrator:
                     del_s = info["delegated_scopes"]
                     app_s = info["app_scopes"]
                     notes = info["notes"]
+
+                    if "@" in code_only and re.search(r"@[A-Za-z0-9_]+", code_only):
+                        notes += "; Splatted parameter hashtable detected - verify parameter hashtable keys for Microsoft Graph"
 
                     delegated_scopes.update(del_s)
                     app_scopes.update(app_s)
@@ -1022,7 +1082,6 @@ class GraphMigrator:
                 continue
             if re.match(r"^param\s*\(", stripped, re.IGNORECASE):
                 has_param_block = True
-                # Track parentheses until param(...) closes
                 paren_depth = 0
                 while idx < n:
                     code_part, _ = _split_inline_comment(lines[idx])
@@ -1038,7 +1097,7 @@ class GraphMigrator:
 
     def _modernize_properties(self, code_part: str) -> str:
         """Modernizes legacy AzureAD/MSOnline property references to Microsoft.Graph SDK properties."""
-        if "." not in code_part:
+        if "." not in code_part and "$" not in code_part:
             return code_part
         code_part = _ACCOUNT_SKUID_RE.sub(r"\1.SkuPartNumber", code_part)
         code_part = _ACTIVE_UNITS_RE.sub(r"\1.PrepaidUnits.Enabled", code_part)
@@ -1047,8 +1106,166 @@ class GraphMigrator:
             code_part = _IS_LICENSED_TRUE_RE.sub(r"($_.AssignedLicenses.Count -gt 0)", code_part)
         return code_part
 
+    def _modernize_single_cmdlet(self, cmd_part: str) -> str:
+        """Modernizes a single cmdlet invocation, updating parameters and auto-injecting -All."""
+        # Handle legacy boolean -All $true / -All $false
+        cmd_part = re.sub(r"-All\s+\$true\b", "-All", cmd_part, flags=re.IGNORECASE)
+        cmd_part = re.sub(r"-All\s+\$false\b", "-Top 100", cmd_part, flags=re.IGNORECASE)
+
+        # Translate -SearchString to OData startswith() filter
+        def _repl_search(m):
+            val = m.group(1).strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                inner = val[1:-1]
+                return f'-Filter "startswith(displayName,\'{inner}\')"'
+            elif "." in val and val.startswith("$"):
+                return f'-Filter "startswith(displayName,\'$({val})\')"'
+            else:
+                return f'-Filter "startswith(displayName,\'{val}\')"'
+
+        cmd_part = re.sub(
+            r"-SearchString\s+((?:\"[^\"]*\"|'[^']*'|\$[A-Za-z0-9_.]+|[^\s\)]+))",
+            _repl_search,
+            cmd_part,
+            flags=re.IGNORECASE
+        )
+
+        # Find cmdlet
+        m_cmd = re.search(r"\b([A-Za-z]+-[A-Za-z0-9]+)\b", cmd_part)
+        if not m_cmd:
+            return cmd_part
+
+        legacy_name = m_cmd.group(1)
+        legacy_key = legacy_name.lower()
+        if legacy_key not in CMDLET_MAPPINGS:
+            return cmd_part
+
+        info = CMDLET_MAPPINGS[legacy_key]
+        target = info["target"]
+
+        # Replace cmdlet name
+        updated = cmd_part[:m_cmd.start()] + target + cmd_part[m_cmd.end():]
+
+        # Update parameter names (supporting colon-binding e.g. -Param:val)
+        for old_param, new_param in info.get("param_map", {}).items():
+            updated = re.sub(rf"(-{re.escape(old_param)})\b", f"-{new_param}", updated, flags=re.IGNORECASE)
+
+        # Inject -All if required
+        if info.get("requires_all"):
+            lower = updated.lower()
+            single_id_params = info.get("single_id_params", [])
+            has_single_id = any(re.search(rf"-{re.escape(p)}\b", lower) for p in single_id_params)
+            has_bound_limit = bool(re.search(r"-(?:all|top)\b", lower))
+
+            if not has_single_id and not has_bound_limit:
+                is_continued = updated.rstrip().endswith("`")
+                if is_continued:
+                    trimmed = updated.rstrip()
+                    updated = trimmed[:-1].rstrip() + " -All `"
+                else:
+                    updated = f"{updated.rstrip()} -All"
+
+        # Check for splatting on legacy cmdlet
+        if re.search(r"@[A-Za-z0-9_]+", updated):
+            updated = f"{updated} # <# MIGRATION-REVIEW: Splatted parameter hashtable detected. Verify Graph parameter keys. #>"
+
+        return updated
+
+    def _modernize_clause(self, clause: str) -> str:
+        """Modernizes a single pipeline or expression clause."""
+        pipe_parts = re.split(r"(?<=[^\s])\s*\|\s*", clause)
+        if len(pipe_parts) > 1:
+            return " | ".join(self._modernize_clause(p) for p in pipe_parts)
+        return self._modernize_single_cmdlet(clause)
+
+    def _modernize_expression(self, expr: str) -> str:
+        """Decomposes an expression inside-out to prevent parameter bleed across nested subexpressions."""
+        placeholders: Dict[str, str] = {}
+        counter = 0
+
+        # 1. Extract and modernize script blocks { ... }
+        while True:
+            m_brace = re.search(r"\{([^{}]+)\}", expr)
+            if not m_brace:
+                break
+            inner = m_brace.group(1)
+            mod_inner = self._modernize_expression(inner)
+            tag = f"__PH_BRACE_{counter}__"
+            counter += 1
+            prefix_space = " " if inner.startswith(" ") else ""
+            suffix_space = " " if inner.endswith(" ") else ""
+            placeholders[tag] = "{" + prefix_space + mod_inner.strip() + suffix_space + "}"
+            expr = expr[:m_brace.start()] + tag + expr[m_brace.end():]
+
+        # 2. Extract and modernize parenthesized subexpressions ( ... )
+        while True:
+            m_paren = re.search(r"\(([^()]+)\)", expr)
+            if not m_paren:
+                break
+            inner = m_paren.group(1)
+            mod_inner = self._modernize_expression(inner)
+            tag = f"__PH_PAREN_{counter}__"
+            counter += 1
+            placeholders[tag] = "(" + mod_inner + ")"
+            expr = expr[:m_paren.start()] + tag + expr[m_paren.end():]
+
+        # 3. Modernize outer clause
+        expr = self._modernize_clause(expr)
+
+        # 4. Property updates on parenthesized results and pipeline objects
+        expr = re.sub(r"(__PH_PAREN_\d+__)\.ObjectId\b", r"\1.Id", expr, flags=re.IGNORECASE)
+        expr = re.sub(r"\$_\.ObjectId\b", "$_.Id", expr, flags=re.IGNORECASE)
+        expr = self._modernize_properties(expr)
+
+        # 5. Restore placeholders in reverse order
+        for tag in reversed(list(placeholders.keys())):
+            expr = expr.replace(tag, placeholders[tag])
+
+        return expr
+
+    def _rewrite_module_loading(self, line: str) -> Optional[str]:
+        """Rewrites retired module loading statements (#Requires, Import-Module, Install-Module)."""
+        stripped = line.strip()
+
+        # 1. #Requires -Modules
+        if stripped.lower().startswith("#requires"):
+            m = re.match(r"(#Requires\s+-Modules\s+)(.*)", line, re.IGNORECASE)
+            if m:
+                prefix, mod_str = m.group(1), m.group(2)
+                mods = [x.strip() for x in mod_str.split(",") if x.strip()]
+                new_mods = []
+                has_graph = False
+                for mod in mods:
+                    if mod.lower() in ("msonline", "azuread", "azureadpreview"):
+                        if not has_graph:
+                            new_mods.extend(["Microsoft.Graph.Users", "Microsoft.Graph.Groups"])
+                            has_graph = True
+                    else:
+                        new_mods.append(mod)
+                return f"{prefix}{', '.join(new_mods)}"
+
+        # 2. Import-Module
+        if re.search(r"\bImport-Module\s+(AzureAD|MSOnline|AzureADPreview)\b", line, re.IGNORECASE):
+            return re.sub(
+                r"\bImport-Module\s+(AzureAD|MSOnline|AzureADPreview)\b",
+                "Import-Module Microsoft.Graph",
+                line,
+                flags=re.IGNORECASE
+            )
+
+        # 3. Install-Module
+        if re.search(r"\bInstall-Module\s+.*?(MSOnline|AzureAD)\b", line, re.IGNORECASE):
+            mod_line = re.sub(r"(-Name\s+)(MSOnline|AzureAD|AzureADPreview)\b", r"\1Microsoft.Graph", line, flags=re.IGNORECASE)
+            mod_line = re.sub(r"-RequiredVersion\s+[0-9a-zA-Z\.\-]+\s*", "", mod_line, flags=re.IGNORECASE)
+            return mod_line
+
+        return None
+
     def _generate_modern_script(self, original_lines: List[str], scopes: Set[str]) -> str:
         out_lines: List[str] = []
+
+        full_text = "\n".join(original_lines)
+        has_cert_auth = bool(re.search(r"Connect-(?:AzureAD|MsolService).*?-Certificate(?:Thumbprint)?\b", full_text, re.DOTALL | re.IGNORECASE))
 
         scope_str = ", ".join(f'"{s}"' for s in sorted(list(scopes))) if scopes else '"User.Read.All"'
         param_end_idx, has_param_block = self._find_header_and_param_end(original_lines)
@@ -1063,7 +1280,6 @@ class GraphMigrator:
         out_lines.append("#>")
 
         if has_param_block:
-            # Emit original leading comments and param(...) block BEFORE Connect-MgGraph so PowerShell syntax is valid
             for idx in range(param_end_idx):
                 out_lines.append(original_lines[idx])
         else:
@@ -1071,30 +1287,72 @@ class GraphMigrator:
             out_lines.append("param()")
 
         out_lines.append("")
-        out_lines.append("# 1. Verify and establish Microsoft Graph connection with least-privilege scopes")
-        out_lines.append("if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {")
-        out_lines.append('    Write-Verbose "Connecting to Microsoft Graph with required scopes..."')
-        out_lines.append(f"    Connect-MgGraph -Scopes {scope_str} -NoWelcome")
-        out_lines.append("}")
+        if not has_cert_auth:
+            out_lines.append("# 1. Verify and establish Microsoft Graph connection with least-privilege scopes")
+            out_lines.append("if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {")
+            out_lines.append('    Write-Verbose "Connecting to Microsoft Graph with required scopes..."')
+            out_lines.append(f"    Connect-MgGraph -Scopes {scope_str} -NoWelcome")
+            out_lines.append("}")
+        else:
+            out_lines.append("# 1. Verify and establish Microsoft Graph connection (App-Only Certificate Authentication)")
         out_lines.append("")
         out_lines.append("# 2. Execute modernized workload operations")
 
         in_block_comment = False
+        in_here_string: Optional[str] = None
         active_continuation_info: Optional[Dict[str, Any]] = None
+        active_cert_continuation = False
 
         for line in original_lines[param_end_idx:]:
             stripped = line.strip()
 
+            # Preserve here-strings
+            if in_here_string is not None:
+                out_lines.append(line)
+                if stripped == f"{in_here_string}@" or stripped == '"@' or stripped == "'@":
+                    in_here_string = None
+                continue
+            if line.rstrip().endswith('@"') or re.search(r'=\s*@"\s*$', line):
+                in_here_string = '"'
+                out_lines.append(line)
+                continue
+            elif line.rstrip().endswith("@'") or re.search(r"=\s*@'\s*$", line):
+                in_here_string = "'"
+                out_lines.append(line)
+                continue
+
             # Preserve block comments
-            if "<#" in stripped:
-                in_block_comment = True
+            inline_block_comments: Dict[str, str] = {}
+            ibc_counter = 0
+            if "<#" in stripped and not in_block_comment:
+                masked = _strip_quoted_literals(stripped)
+                if "<#" in masked:
+                    if "#>" in masked:
+                        def repl_ibc(m_ibc):
+                            nonlocal ibc_counter
+                            tag = f"__PH_IBC_{ibc_counter}__"
+                            ibc_counter += 1
+                            inline_block_comments[tag] = m_ibc.group(0)
+                            return tag
+                        line = re.sub(r"<#.*?#>", repl_ibc, line)
+                        stripped = line.strip()
+                    else:
+                        in_block_comment = True
+                        out_lines.append(line)
+                        continue
             if in_block_comment:
                 out_lines.append(line)
                 if "#>" in stripped:
                     in_block_comment = False
                 continue
 
-            # Preserve single-line comments
+            # Check module loading rewrites
+            mod_rewritten = self._rewrite_module_loading(line)
+            if mod_rewritten is not None:
+                out_lines.append(mod_rewritten)
+                continue
+
+            # Preserve pure comment lines
             if stripped.startswith("#"):
                 out_lines.append(line)
                 continue
@@ -1104,12 +1362,38 @@ class GraphMigrator:
 
             # Handle Connect / Disconnect calls
             if "connect-" in unquoted_code.lower() and _CONNECT_CMD_RE.search(unquoted_code):
-                out_lines.append(f"# Replaced legacy connection: {stripped}")
-                out_lines.append(f"# Connect-MgGraph -Scopes {scope_str} -NoWelcome")
-                active_continuation_info = None
+                # Check for PSCredential basic auth
+                if "-credential" in unquoted_code.lower():
+                    out_lines.append(f"# <# MIGRATION-REVIEW: Legacy PSCredential basic auth is not supported by Microsoft Graph. Use Connect-MgGraph -Identity (Managed Identity) or certificate-based authentication. #>")
+                    out_lines.append(f"# {stripped}")
+                    out_lines.append("# Connect-MgGraph -Identity")
+                    continue
+                # Check for Certificate app-only auth
+                if has_cert_auth or "-certificate" in unquoted_code.lower():
+                    updated_conn = re.sub(r"\bConnect-(?:AzureAD|MsolService)\b", "Connect-MgGraph", code_part, flags=re.IGNORECASE)
+                    updated_conn = re.sub(r"-ApplicationId\b", "-ClientId", updated_conn, flags=re.IGNORECASE)
+                    if updated_conn.rstrip().endswith("`"):
+                        active_cert_continuation = True
+                    else:
+                        updated_conn = f"{updated_conn.rstrip()} -NoWelcome"
+                    out_lines.append(updated_conn + (" " + comment_part if comment_part else ""))
+                    continue
+                else:
+                    out_lines.append(f"# Replaced legacy connection: {stripped}")
+                    out_lines.append(f"# Connect-MgGraph -Scopes {scope_str} -NoWelcome")
+                    active_continuation_info = None
+                    continue
+
+            # Continuation line for certificate connection
+            if active_cert_continuation:
+                updated_conn = re.sub(r"-ApplicationId\b", "-ClientId", code_part, flags=re.IGNORECASE)
+                if not updated_conn.rstrip().endswith("`"):
+                    active_cert_continuation = False
+                    updated_conn = f"{updated_conn.rstrip()} -NoWelcome"
+                out_lines.append(updated_conn + (" " + comment_part if comment_part else ""))
                 continue
 
-            # If we are inside a multiline backtick continuation from a previous line's cmdlet
+            # Continuation line from a previous backtick cmdlet
             if active_continuation_info is not None:
                 updated_code = code_part
                 for old_param, new_param in active_continuation_info.get("param_map", {}).items():
@@ -1122,53 +1406,36 @@ class GraphMigrator:
                     active_continuation_info = None
                 continue
 
-            # Tokenize unquoted code to match only real executable cmdlets
+            # Check if this line continues onto the next line
+            is_backtick_continued = code_part.rstrip().endswith("`")
+
+            # Check if line contains a legacy cmdlet
             tokens = _WORD_TOKEN_RE.findall(unquoted_code)
             matched_cmdlets = [t.lower() for t in tokens if t.lower() in CMDLET_MAPPINGS]
 
             if not matched_cmdlets:
-                out_lines.append(self._modernize_properties(code_part) + comment_part)
+                res = self._modernize_properties(code_part) + ((" " + comment_part) if comment_part else "")
+                for tag, orig_c in inline_block_comments.items():
+                    res = res.replace(tag, orig_c)
+                out_lines.append(res)
                 continue
 
-            updated_code = code_part
-            for legacy in matched_cmdlets:
-                info = CMDLET_MAPPINGS[legacy]
-                pattern = rf"\b{re.escape(legacy)}\b"
-                updated_code = re.sub(pattern, info["target"], updated_code, flags=re.IGNORECASE)
+            # Semicolon statements handled independently
+            if ";" in code_part:
+                stmts = code_part.split(";")
+                mod_stmts = [self._modernize_expression(s.strip()) for s in stmts]
+                updated_code = "; ".join(mod_stmts)
+            else:
+                updated_code = self._modernize_expression(code_part)
 
-                # Update parameter names on this line
-                lower_for_params = updated_code.lower()
-                for old_param, new_param in info.get("param_map", {}).items():
-                    if f"-{old_param}" in lower_for_params:
-                        param_pattern = rf"(-{re.escape(old_param)})\b"
-                        updated_code = re.sub(param_pattern, f"-{new_param}", updated_code, flags=re.IGNORECASE)
+            if is_backtick_continued and matched_cmdlets:
+                active_continuation_info = CMDLET_MAPPINGS[matched_cmdlets[0]]
 
-                # Check if this command continues onto the next line via trailing backtick `
-                is_continued = updated_code.rstrip().endswith("`")
-                if is_continued:
-                    active_continuation_info = info
-
-                # Determine whether -All should be auto-injected
-                if info.get("requires_all"):
-                    lower_code = updated_code.lower()
-                    single_id_params = info.get("single_id_params", [])
-                    has_single_id = any(f"-{p}" in lower_code and re.search(rf"-{re.escape(p)}\b", lower_code) for p in single_id_params)
-                    has_bound_limit = bool(_BOUND_LIMIT_RE.search(lower_code))
-
-                    if not has_single_id and not has_bound_limit:
-                        if is_continued:
-                            # Insert -All before the trailing backtick `
-                            trimmed_code = updated_code.rstrip()
-                            updated_code = trimmed_code[:-1].rstrip() + " -All `"
-                        elif "|" in updated_code:
-                            parts = updated_code.split("|", 1)
-                            updated_code = f"{parts[0].rstrip()} -All |{parts[1]}"
-                        else:
-                            updated_code = f"{updated_code.rstrip()} -All"
-
-            updated_code = self._modernize_properties(updated_code)
             sep = " " if (comment_part and not updated_code.endswith(" ")) else ""
-            out_lines.append(updated_code + sep + comment_part)
+            res = updated_code + sep + comment_part
+            for tag, orig_c in inline_block_comments.items():
+                res = res.replace(tag, orig_c)
+            out_lines.append(res)
 
         return "\n".join(out_lines)
 
@@ -1271,7 +1538,6 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Read input (using utf-8-sig to strip any Windows PowerShell UTF-8 BOM \ufeff)
     script_name = "PastedScript.ps1"
     if args.input == "-":
         if sys.stdin.isatty():
@@ -1280,11 +1546,30 @@ def main() -> int:
         content = sys.stdin.read().lstrip("\ufeff")
     else:
         p = Path(args.input)
+        if p.is_dir():
+            sys.stderr.write(f"Error: Input path is a directory, not a script file: {p}\n")
+            return 1
         if not p.exists():
             sys.stderr.write(f"Error: Input file not found: {p}\n")
             return 1
         script_name = p.name
-        content = p.read_text(encoding="utf-8-sig", errors="replace").lstrip("\ufeff")
+        raw = p.read_bytes()
+        # Multi-encoding support: UTF-16 LE (BOM and BOM-less), UTF-16 BE, UTF-8, CP1252
+        if raw.startswith(b"\xff\xfe"):
+            content = raw.decode("utf-16-le")
+        elif raw.startswith(b"\xfe\xff"):
+            content = raw.decode("utf-16-be")
+        elif b"\x00" in raw[:1024]:
+            content = raw.decode("utf-16-le", errors="replace")
+        else:
+            try:
+                content = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                try:
+                    content = raw.decode("cp1252")
+                except UnicodeDecodeError:
+                    content = raw.decode("utf-8", errors="replace")
+        content = content.lstrip("\ufeff")
 
     # If input is JSON inventory from Scan-LegacyGraphCmdlets.ps1
     trimmed = content.strip()
@@ -1308,7 +1593,9 @@ def main() -> int:
         rendered = format_markdown(analysis, sanitize=args.sanitize)
 
     if args.output:
-        Path(args.output).write_text(rendered, encoding="utf-8")
+        out_p = Path(args.output)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text(rendered, encoding="utf-8")
     else:
         print(rendered)
 
