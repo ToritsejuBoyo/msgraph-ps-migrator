@@ -5,7 +5,8 @@
 [![PowerShell: 5.1%20%2F%207+](https://img.shields.io/badge/PowerShell-5.1%20%2F%207+-blue.svg)](https://learn.microsoft.com/powershell/)
 [![Standard: agentskills.io](https://img.shields.io/badge/Standard-agentskills.io-purple.svg)](https://agentskills.io)
 [![Verification: Passing](https://img.shields.io/badge/Verification-7%2F7%20Passed-success.svg)](tests/validate-skill.py)
-[![Stress Battery: Passing](https://img.shields.io/badge/Stress%20Battery-38%2F38%20Passed-success.svg)](tests/stress_test_msgraph_migrator.py)
+[![Stress Battery: Passing](https://img.shields.io/badge/Stress%20Battery-48%2F48%20Passed-success.svg)](tests/stress_test_msgraph_migrator.py)
+[![Extreme Battery: Passing](https://img.shields.io/badge/Extreme%20Battery-23%2F23%20Passed-success.svg)](tests/extreme_test_msgraph_migrator.py)
 
 An autonomous AI Agent Skill and zero-dependency deterministic migration toolkit for PowerShell Automation Engineers, M365 Administrators, and Systems Administrators. Converts deprecated `AzureAD` and `MSOnline` PowerShell scripts into modern `Microsoft.Graph` PowerShell SDK v2.x cmdlets with least-privilege Graph scopes, automated pagination protection, and robust error handling.
 
