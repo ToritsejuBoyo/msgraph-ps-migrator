@@ -1,13 +1,12 @@
 # AzureAD & MSOnline to Microsoft Graph PowerShell Migrator (`msgraph-ps-migrator`)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-brightgreen.svg)](https://www.python.org/)
-[![PowerShell: 5.1%20%2F%207+](https://img.shields.io/badge/PowerShell-5.1%20%2F%207+-blue.svg)](https://learn.microsoft.com/powershell/)
-[![Standard: agentskills.io](https://img.shields.io/badge/Standard-agentskills.io-purple.svg)](https://agentskills.io)
-[![Verification: Passing](https://img.shields.io/badge/Verification-7%2F7%20Passed-success.svg)](tests/validate-skill.py)
-[![Stress Battery: Passing](https://img.shields.io/badge/Stress%20Battery-48%2F48%20Passed-success.svg)](tests/stress_test_msgraph_migrator.py)
-[![Extreme Battery: Passing](https://img.shields.io/badge/Extreme%20Battery-23%2F23%20Passed-success.svg)](tests/extreme_test_msgraph_migrator.py)
 
+[![tests](https://github.com/ToritsejuBoyo/msgraph-ps-migrator/actions/workflows/tests.yml/badge.svg)](https://github.com/ToritsejuBoyo/msgraph-ps-migrator/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)]()
+[![Dependencies](https://img.shields.io/badge/dependencies-zero%20(stdlib%20only)-brightgreen.svg)](CONTRIBUTING.md)
+[![Security](https://img.shields.io/badge/security-read--only%20%7C%20no%20egress-informational.svg)](SECURITY.md)
+[![Standard](https://img.shields.io/badge/standard-agentskills.io-blueviolet.svg)](https://agentskills.io)
 An autonomous AI Agent Skill and zero-dependency deterministic migration toolkit for PowerShell Automation Engineers, M365 Administrators, and Systems Administrators. Converts deprecated `AzureAD` and `MSOnline` PowerShell scripts into modern `Microsoft.Graph` PowerShell SDK v2.x cmdlets with least-privilege Graph scopes, automated pagination protection, and robust error handling.
 
 ![Microsoft Graph Migrator Terminal Demo](assets/demo.gif)
