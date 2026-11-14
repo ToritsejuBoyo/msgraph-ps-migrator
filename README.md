@@ -3,7 +3,7 @@
 
 [![tests](https://github.com/ToritsejuBoyo/msgraph-ps-migrator/actions/workflows/tests.yml/badge.svg)](https://github.com/ToritsejuBoyo/msgraph-ps-migrator/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)]()
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![Dependencies](https://img.shields.io/badge/dependencies-zero%20(stdlib%20only)-brightgreen.svg)](CONTRIBUTING.md)
 [![Security](https://img.shields.io/badge/security-read--only%20%7C%20no%20egress-informational.svg)](SECURITY.md)
 [![Standard](https://img.shields.io/badge/standard-agentskills.io-blueviolet.svg)](https://agentskills.io)
@@ -75,7 +75,7 @@ Local Sanitizer (--sanitize)           Paging & Licensing Translation         Le
 ## 4. Installation & Setup Guide
 
 ### 1. Prerequisites
-* **Python Runtime:** Python 3.9 or higher (standard library only; verify with `python --version`).
+* **Python Runtime:** Python 3.10 or higher (standard library only; verify with `python --version`).
 * **PowerShell Runtime:** Windows PowerShell 5.1 or PowerShell 7+ (`pwsh`).
 * **Target PowerShell Module (Production Host):** `Microsoft.Graph` v2.x (installed on the machine executing migrated scripts via `Install-Module Microsoft.Graph`).
 
